@@ -1,0 +1,272 @@
+text
+edugenie/
+├── pom.xml
+└── src/
+    └── main/
+        ├── java/
+        │   └── com/
+        │       └── edugenie/
+        │           ├── EduGenieApplication.java
+        │           ├── controller/
+        │           │   └── EduGenieController.java
+        │           └── service/
+        │               ├── GeminiService.java
+        │               └── QuizService.java
+        └── resources/
+            ├── application.properties
+            ├── templates/
+            │   └── index.html
+            └── static/
+                └── style.css
+
+xml
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" 
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.edugenie</groupId>
+    <artifactId>edugenie</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>EduGenie</name>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.0</version>
+    </parent>
+
+    <dependencies>
+        <!-- Spring Boot Starter Web -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Thymeleaf Templating Engine -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-thymeleaf</artifactId>
+        </dependency>
+
+        <!-- Jackson Databind for JSON Handling -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
+server.port=8000
+gemini.api.key=${GEMINI_API_KEY}
+
+java
+
+package com.edugenie.service;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@Service
+public class GeminiService {
+
+    @Value("${gemini.api.key}")
+    private String apiKey;
+
+    private final RestTemplate restTemplate = new RestTemplate();
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    public String generateContent(String prompt) {
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=" + apiKey;
+
+        try {
+            // Build Request Body
+            Map<String, Object> textPart = Map.of("text", prompt);
+            Map<String, Object> parts = Map.of("parts", List.of(textPart));
+            Map<String, Object> requestBody = Map.of("contents", List.of(parts));
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
+
+            ResponseEntity<String> response = restTemplate.postForEntity(url, entity, String.class);
+
+            // Parse response JSON to extract text
+            JsonNode rootNode = objectMapper.readTree(response.getBody());
+            return rootNode
+                    .path("candidates").get(0)
+                    .path("content").path("parts").get(0)
+                    .path("text").asText().trim();
+
+        } catch (Exception e) {
+            return "⚠️ Error communicating with Gemini API: " + e.getMessage();
+        }
+    }
+
+    public String explainTopic(String topic) {
+        String prompt = "Explain the concept of '" + topic + "' in a simple and clear way for a school student.";
+        return generateContent(prompt);
+    }
+
+    public String summarizeText(String text) {
+        String prompt = "Summarize the following text in simple language:\n\n" + text;
+        return generateContent(prompt);
+    }
+
+    public String getLearningRecommendations(String topic) {
+        String prompt = "You are an AI tutor. The student wants to learn about: " + topic + ".\n" +
+                "Suggest a structured and adaptive learning path including key topics, order of learning, and resources.\n" +
+                "Include beginner, intermediate, and advanced levels if needed.";
+        return generateContent(prompt);
+    }
+}
+
+
+package com.edugenie.service;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+@Service
+public class QuizService {
+
+    @Autowired
+    private GeminiService geminiService;
+
+    public String generateQuizJson(String passage) {
+        String prompt = "You are a quiz generator.\n\n" +
+                "From the following passage, create 3 multiple-choice questions. Each question should include:\n" +
+                "- A \"question\"\n" +
+                "- A list of 4 \"options\"\n" +
+                "- A correct \"answer\" that must exactly match one of the options.\n\n" +
+                "Format your output strictly as valid JSON like this:\n" +
+                "[\n" +
+                "  {\n" +
+                "    \"question\": \"What is ...?\",\n" +
+                "    \"options\": [\"A\", \"B\", \"C\", \"D\"],\n" +
+                "    \"answer\": \"A\"\n" +
+                "  }\n" +
+                "]\n\n" +
+                "Passage:\n" + passage;
+
+        String rawResponse = geminiService.generateContent(prompt);
+
+        // Clean ```json code fences from response
+        return rawResponse.replaceAll("```json", "").replaceAll("```", "").trim();
+    }
+}
+
+package com.edugenie.controller;
+
+import com.edugenie.service.GeminiService;
+import com.edugenie.service.QuizService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.stereotype.Controller;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+@Controller
+public class EduGenieController {
+
+    @Autowired
+    private GeminiService geminiService;
+
+    @Autowired
+    private QuizService quizService;
+
+    @GetMapping("/")
+    public String index() {
+        return "index";
+    }
+
+    // Q&A - GET API
+    @GetMapping("/qa")
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> answerQuestion(@RequestParam String question) {
+        String answer = geminiService.generateContent(question);
+        return ResponseEntity.ok(Map.of("answer", answer));
+    }
+
+    // Explanation - POST API
+    @PostMapping("/explain/")
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> explainApi(@RequestBody Map<String, String> payload) {
+        String topic = payload.get("topic");
+        if (topic == null || topic.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Please provide a topic."));
+        }
+        String explanation = geminiService.explainTopic(topic);
+        return ResponseEntity.ok(Map.of("topic", topic, "explanation", explanation));
+    }
+
+    // Summarization - POST API
+    @PostMapping("/summarize/")
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> summarizeApi(@RequestBody Map<String, String> payload) {
+        String text = payload.get("text");
+        if (text == null || text.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Please provide text to summarize."));
+        }
+        String summary = geminiService.summarizeText(text);
+        return ResponseEntity.ok(Map.of("summary", summary));
+    }
+
+    // Quiz Generation - POST API
+    @PostMapping("/quiz")
+    @ResponseBody
+    public ResponseEntity<?> quizApi(@RequestBody Map<String, String> payload) {
+        String text = payload.get("text");
+        if (text == null || text.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Please provide text for quiz."));
+        }
+        String quizJson = quizService.generateQuizJson(text);
+        return ResponseEntity.ok().contentType(org.springframework.http.MediaType.APPLICATION_JSON).body(quizJson);
+    }
+
+    // Learning Recommendations - GET API
+    @GetMapping("/learn/recommendations")
+    @ResponseBody
+    public ResponseEntity<Map<String, String>> learningRecommendationApi(@RequestParam String topic) {
+        String recommendation = geminiService.getLearningRecommendations(topic);
+        return ResponseEntity.ok(Map.of("topic", topic, "recommendation", recommendation));
+    }
+}
+
+package com.edugenie;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class EduGenieApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(EduGenieApplication.class, args);
+    }
+}
+
+export GEMINI_API_KEY="your_actual_gemini_api_key"
+
+mvn spring-boot:run
+
+[http://127.0.0.1:8000](http://127.0.0.1:8000)
